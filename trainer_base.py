@@ -505,6 +505,9 @@ class Diffusion(TrainerBase):
       1, eps, num_steps + 1, device=self.device)
     dt = (1 - eps) / num_steps
     p_x0_cache = None
+    
+    # Initialize logits collection
+    self._step_logits = []
 
     for i in range(num_steps):
       t = timesteps[i] * torch.ones(
@@ -534,8 +537,11 @@ class Diffusion(TrainerBase):
                                  noise_removal_step=True)
     elif self.config.sampling.noise_removal == 'greedy':
       sigma = self._sigma_from_alphat(self.noise(t0)[1])
-      x = self.forward(xt=x, sigma=sigma).argmax(dim=-1)
-    return x
+      logits = self.forward(xt=x, sigma=sigma)
+      x = logits.argmax(dim=-1)
+      return x, logits.detach()
+    
+    return x, getattr(self, '_step_logits', None)
 
   @torch.no_grad
   def _semi_ar_sampler(
@@ -652,8 +658,12 @@ class AbsorbingState(Diffusion):
       _, alpha_s = self.noise(t - dt)
     assert alpha_t.ndim == 2
     if p_x0 is None:
-      p_x0 = self.forward(
-        x, self._sigma_from_alphat(alpha_t)).exp()
+      logits = self.forward(x, self._sigma_from_alphat(alpha_t))
+      p_x0 = logits.exp()
+      # Store logits for this step (minimal change)
+      if not hasattr(self, '_step_logits'):
+        self._step_logits = []
+      self._step_logits.append(logits.detach())
     
     q_xs = p_x0 * (alpha_s - alpha_t)[:, :, None]
     q_xs[:, :, self.mask_index] = 1 - alpha_s

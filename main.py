@@ -112,7 +112,7 @@ def _generate_samples(diffusion_model, config, logger,
       # and diffusion.compute_generative_perplexity() discards
       # any text after the first EOS token.
     else:
-      samples = model.restore_model_and_sample(
+      samples, all_logits = model.restore_model_and_sample(
         num_steps=config.sampling.steps)
       model.metrics.record_entropy(samples)
       text_samples = model.tokenizer.batch_decode(samples)
@@ -127,10 +127,26 @@ def _generate_samples(diffusion_model, config, logger,
     print('Generative perplexity:', generative_ppl)
     print('Sample entropy:', entropy)
   samples_path = config.eval.generated_samples_path
+  output_data = {
+    'generative_ppl': generative_ppl,
+    'entropy': entropy,
+    'generated_seqs': all_samples
+  }
+  
+  # Add logits if available
+  if 'all_logits' in locals() and all_logits is not None:
+    # Convert logits to CPU and convert to list for JSON serialization
+    logits_cpu = []
+    for step_logits in all_logits:
+      if step_logits is not None:
+        logits_cpu.append(step_logits.cpu().numpy().tolist())
+      else:
+        logits_cpu.append(None)
+    output_data['logits_per_step'] = logits_cpu
+    print(f'Logits collected for {len(logits_cpu)} steps')
+  
   with fsspec.open(samples_path, 'w') as f:
-    json.dump({'generative_ppl': generative_ppl,
-               'entropy': entropy,
-               'generated_seqs': all_samples}, f, indent=4)
+    json.dump(output_data, f, indent=4)
   print('Samples saved at:', samples_path)
 
 def _eval_ppl(diffusion_model, config, logger, tokenizer):
